@@ -1,0 +1,27 @@
+[Unit]
+Description=SAP Business Accelerator Hub catalog sync (one shot)
+Documentation=file:/opt/sap-bah-sandbox/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sapbah
+Group=sapbah
+WorkingDirectory=/opt/sap-bah-sandbox
+EnvironmentFile=/opt/sap-bah-sandbox/.env
+Environment=NODE_OPTIONS=--disable-warning=ExperimentalWarning
+
+# Add --specs to also download specifications (needs HUB_API_KEY or HUB_COOKIE).
+# Add --filter <text> to crawl only part of the catalog.
+ExecStart=/usr/bin/node dist/cli/sync.js
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/sap-bah-sandbox/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sapbah-sync

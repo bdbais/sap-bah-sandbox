@@ -1,0 +1,38 @@
+[Unit]
+Description=SAP Business Accelerator Hub sandbox (mock server, catalog tracker, traffic inspector)
+Documentation=file:/opt/sap-bah-sandbox/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sapbah
+Group=sapbah
+WorkingDirectory=/opt/sap-bah-sandbox
+EnvironmentFile=/opt/sap-bah-sandbox/.env
+# node:sqlite is still flagged experimental and prints a warning on every start.
+Environment=NODE_OPTIONS=--disable-warning=ExperimentalWarning
+ExecStart=/usr/bin/node dist/server.js
+Restart=on-failure
+RestartSec=5
+
+# Hardening. The sandbox only needs to read its own tree and write ./data.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/sap-bah-sandbox/data
+
+# Binding below 1024 needs this; on the default port 8080 it is unnecessary.
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sapbah-sandbox
+
+[Install]
+WantedBy=multi-user.target

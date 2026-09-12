@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the SAP Business Accelerator Hub catalog sync nightly
+Documentation=file:/opt/sap-bah-sandbox/README.md
+
+[Timer]
+# 02:30 local time, with jitter so every install does not hit api.sap.com at once.
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=30m
+# Catch up after the machine was off.
+Persistent=true
+Unit=sapbah-sync.service
+
+[Install]
+WantedBy=timers.target

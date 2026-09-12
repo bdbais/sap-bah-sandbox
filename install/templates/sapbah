@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+#
+# SAP BAH Sandbox control script (macOS / Linux).
+#
+#   sapbah start | stop | restart | status | logs | open
+#   sapbah sync [--filter X] [--specs]
+#   sapbah test --mock <slug> [--read-only]
+#   sapbah update [--check] [--force]
+#   sapbah service install | uninstall
+#
+# Uses the Node runtime bundled next to it — the system Node is never touched.
+# Once autostart is registered, start/stop go through launchd or systemd, so a
+# hand-started copy and the service never fight over the port.
+#
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NODE="$HERE/runtime/bin/node"
+APP="$HERE/app"
+DATA="$HERE/data"
+PIDFILE="$DATA/sandbox.pid"
+LOGFILE="$DATA/sandbox.log"
+SERVICE_LABEL="info.bais.sapbah-sandbox"
+PLIST="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
+UNIT="sapbah-sandbox.service"
+
+[[ -x "$NODE" ]] || { echo "Bundled Node runtime is missing: $NODE" >&2; exit 1; }
+mkdir -p "$DATA"
+
+# .env lives beside this script; the app reads it from its own working directory.
+export DOTENV_CONFIG_PATH="$HERE/.env"
+
+is_macos()  { [[ "$(uname -s)" == "Darwin" ]]; }
+env_value() { grep -E "^$1=" "$HERE/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' || true; }
+port()      { env_value PORT; }
+url()       { echo "http://127.0.0.1:$(port | grep -E '^[0-9]+$' || echo 8080)"; }
+
+running() {
+  [[ -f "$PIDFILE" ]] || return 1
+  local pid; pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+service_registered() {
+  if is_macos; then
+    [[ -f "$PLIST" ]]
+  else
+    command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled "$UNIT" >/dev/null 2>&1
+  fi
+}
+
+service_manager() { if is_macos; then echo "launchd"; else echo "systemd --user"; fi; }
+
+start() {
+  if service_registered; then
+    if is_macos; then launchctl load "$PLIST" 2>/dev/null || true
+    else systemctl --user start "$UNIT"; fi
+    echo "Started by $(service_manager) — $(url)/"
+    return 0
+  fi
+  if running; then echo "Already running (pid $(cat "$PIDFILE")) — $(url)"; return 0; fi
+  cd "$HERE"
+  NODE_OPTIONS="--disable-warning=ExperimentalWarning" \
+    nohup "$NODE" "$APP/dist/server.js" >>"$LOGFILE" 2>&1 &
+  echo $! > "$PIDFILE"
+  sleep 1
+  if running; then
+    echo "Started (pid $(cat "$PIDFILE"))"
+    echo "  UI    $(url)/"
+    echo "  Logs  $LOGFILE"
+  else
+    echo "Failed to start. Last lines of $LOGFILE:" >&2
+    tail -n 20 "$LOGFILE" >&2 || true
+    exit 1
+  fi
+}
+
+# Stops a copy started by "sapbah start". Fails when there was none.
+stop_pid() {
+  if ! running; then rm -f "$PIDFILE"; return 1; fi
+  local pid; pid="$(cat "$PIDFILE")"
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 25); do running || break; sleep 0.2; done
+  if running; then kill -9 "$pid" 2>/dev/null || true; fi
+  rm -f "$PIDFILE"
+}
+
+stop() {
+  local stopped=0
+  if service_registered; then
+    if is_macos; then launchctl unload "$PLIST" 2>/dev/null || true
+    else systemctl --user stop "$UNIT" 2>/dev/null || true; fi
+    stopped=1
+  fi
+  if stop_pid; then stopped=1; fi
+  if [[ $stopped -eq 1 ]]; then echo "Stopped."; else echo "Not running."; fi
+}
+
+status() {
+  local up=0
+  if running; then
+    up=1
+  elif service_registered; then
+    if is_macos; then
+      if launchctl list "$SERVICE_LABEL" >/dev/null 2>&1; then up=1; fi
+    elif systemctl --user is-active --quiet "$UNIT"; then
+      up=1
+    fi
+  fi
+  if [[ $up -eq 1 ]]; then echo "Running — $(url)/"; else echo "Stopped."; fi
+  if service_registered; then
+    echo "Autostart: registered ($(service_manager))"
+  else
+    echo "Autostart: not registered"
+  fi
+}
+
+# --- autostart -------------------------------------------------------------
+
+service_install_macos() {
+  mkdir -p "$(dirname "$PLIST")"
+  cat > "$PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$SERVICE_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$NODE</string>
+    <string>$APP/dist/server.js</string>
+  </array>
+  <key>WorkingDirectory</key><string>$HERE</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>NODE_OPTIONS</key><string>--disable-warning=ExperimentalWarning</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$LOGFILE</string>
+  <key>StandardErrorPath</key><string>$LOGFILE</string>
+</dict>
+</plist>
+PLIST
+  launchctl unload "$PLIST" 2>/dev/null || true
+  launchctl load "$PLIST"
+  echo "Registered as a launchd agent — starts at login."
+  echo "  plist: $PLIST"
+}
+
+service_install_linux() {
+  local unit="$HOME/.config/systemd/user/$UNIT"
+  mkdir -p "$(dirname "$unit")"
+  cat > "$unit" <<UNIT
+[Unit]
+Description=SAP Business Accelerator Hub sandbox
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$HERE
+Environment=NODE_OPTIONS=--disable-warning=ExperimentalWarning
+ExecStart=$NODE $APP/dist/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user enable "$UNIT"
+  # restart, not start: after an upgrade the old build may still be running.
+  systemctl --user restart "$UNIT"
+  # Without lingering, a user service stops when the last session ends.
+  if command -v loginctl >/dev/null 2>&1; then
+    loginctl enable-linger "$USER" >/dev/null 2>&1 \
+      && echo "Enabled lingering so it survives logout." \
+      || echo "Note: could not enable lingering (needs sudo) — it will stop at logout."
+  fi
+  echo "Registered as a systemd user service — starts at boot."
+  echo "  unit: $unit"
+  echo "  logs: journalctl --user -u sapbah-sandbox -f"
+}
+
+service_uninstall() {
+  if is_macos; then
+    launchctl unload "$PLIST" 2>/dev/null || true
+    rm -f "$PLIST"
+  else
+    systemctl --user disable --now "$UNIT" 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/$UNIT"
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+  echo "Autostart removed."
+}
+
+open_ui() {
+  local u; u="$(url)/"
+  if is_macos; then open "$u"; else xdg-open "$u" >/dev/null 2>&1 || echo "$u"; fi
+}
+
+# --- update ----------------------------------------------------------------
+
+installed_version() { "$NODE" -p 'require(process.argv[1]).version' "$APP/package.json"; }
+
+# newer A B: succeeds when A is a higher major.minor.patch than B.
+newer() {
+  "$NODE" -e '
+    const p = (v) => v.replace(/^v/, "").split(/[.+-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
+    const a = p(process.argv[1]), b = p(process.argv[2]);
+    for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) process.exit((a[i] || 0) > (b[i] || 0) ? 0 : 1);
+    process.exit(1);' "$1" "$2"
+}
+
+update() {
+  local auto=0 check=0 force=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --auto)  auto=1 ;;
+      --check) check=1 ;;
+      --force) force=1 ;;
+      *) echo "Unknown option: $arg" >&2; return 1 ;;
+    esac
+  done
+  if [[ $auto -eq 1 ]]; then
+    # Started by the server with nobody watching: keep a log instead.
+    exec >>"$DATA/update.log" 2>&1
+    echo
+    echo "=== $(date '+%Y-%m-%d %H:%M:%S') automatic update"
+  fi
+
+  local repo current json tag latest
+  repo="$(env_value UPDATE_REPO)"; repo="${repo:-bdbais/sap-bah-sandbox}"
+  current="$(installed_version)"
+  if ! json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: sap-bah-sandbox' \
+                 "https://api.github.com/repos/$repo/releases/latest")"; then
+    echo "Could not get the latest release of $repo from GitHub (none published yet, or no network)." >&2
+    return 1
+  fi
+  tag="$(printf '%s' "$json" | "$NODE" -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => process.stdout.write(String(JSON.parse(s).tag_name || "")))')"
+  latest="${tag#v}"
+  [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "Unexpected release tag: '$tag'" >&2; return 1; }
+  echo "Installed: $current   Latest: $latest"
+
+  if [[ $force -eq 0 ]] && ! newer "$latest" "$current"; then echo "Already up to date."; return 0; fi
+  if [[ $check -eq 1 ]]; then
+    echo "Update available: https://github.com/$repo/releases/tag/$tag"
+    echo "Install it with:   $HERE/sapbah update"
+    return 0
+  fi
+
+  local work src="" d
+  work="$(mktemp -d "${TMPDIR:-/tmp}/sapbah-update.XXXXXX")"
+  echo "Downloading $tag…"
+  if ! curl -fsSL -o "$work/source.tar.gz" "https://github.com/$repo/archive/refs/tags/$tag.tar.gz" \
+     || ! tar -xzf "$work/source.tar.gz" -C "$work"; then
+    rm -rf "$work"; echo "Download failed." >&2; return 1
+  fi
+  for d in "$work"/*/; do src="${d%/}"; break; done
+  if [[ -z "$src" || ! -f "$src/install/install.sh" ]]; then
+    rm -rf "$work"; echo "The downloaded release has no install/install.sh." >&2; return 1
+  fi
+
+  # The installer stops this sandbox, rebuilds it and starts it again, keeping
+  # data/ and .env. The cache keeps the runtime download for next time.
+  local args=(--dir "$HERE")
+  service_registered || args+=(--no-service)
+  if SAPBAH_CACHE="$HERE/cache" bash "$src/install/install.sh" "${args[@]}"; then
+    rm -rf "$work"
+    echo "Updated to $latest."
+  else
+    rm -rf "$work"
+    echo "Update failed — starting the installed version again." >&2
+    "$HERE/sapbah" start || true
+    return 1
+  fi
+}
+
+# Every branch ends in exit: "sapbah update" rewrites this very file, and bash
+# reads scripts as it goes, so it must not read past the case once it returns.
+case "${1:-}" in
+  start)   start; exit ;;
+  stop)    stop; exit ;;
+  restart) stop; start; exit ;;
+  status)  status; exit ;;
+  logs)    tail -n "${2:-80}" -f "$LOGFILE"; exit ;;
+  open)    open_ui; exit ;;
+  sync)    shift; cd "$HERE"; NODE_OPTIONS="--disable-warning=ExperimentalWarning" "$NODE" "$APP/dist/cli/sync.js" "$@"; exit ;;
+  test)    shift; cd "$HERE"; NODE_OPTIONS="--disable-warning=ExperimentalWarning" "$NODE" "$APP/dist/cli/test.js" "$@"; exit ;;
+  update)  shift; update "$@"; exit ;;
+  service)
+    case "${2:-}" in
+      install)
+        # A hand-started copy would hold the port the service needs.
+        stop_pid || true
+        if is_macos; then service_install_macos; else service_install_linux; fi ;;
+      uninstall) service_uninstall ;;
+      *) echo "Usage: sapbah service install|uninstall" >&2; exit 1 ;;
+    esac
+    exit ;;
+  *)
+    cat <<USAGE
+SAP BAH Sandbox
+
+  sapbah start | stop | restart | status
+  sapbah logs [lines]        follow the log
+  sapbah open                open the UI in a browser
+  sapbah sync [--filter X] [--specs]
+  sapbah test --mock <slug> [--read-only]
+  sapbah update              install the latest release (--check: only look)
+  sapbah service install     start automatically at login/boot
+  sapbah service uninstall
+
+Config: $HERE/.env
+Data:   $DATA
+USAGE
+    exit ;;
+esac

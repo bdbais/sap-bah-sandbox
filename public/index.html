@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SAP Business Accelerator Hub — Sandbox</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>🧪</text></svg>">
+</head>
+<body>
+  <header>
+    <h1>SAP BAH Sandbox</h1>
+    <nav>
+      <button data-tab="catalog" class="active">Catalog</button>
+      <button data-tab="changes">Changes</button>
+      <button data-tab="mocks">Mocks</button>
+      <button data-tab="tests">Tests</button>
+      <button data-tab="network">Network</button>
+    </nav>
+    <span class="spacer"></span>
+    <a class="donate" href="https://paypal.me/bellizia" target="_blank" rel="noopener"
+       title="SAP BAH Sandbox is free and open source. If it saves you time, you can support it.">♥ Donate</a>
+    <label class="inline" title="Sent as the X-Sandbox-Key header">
+      key <input id="adminKey" type="password" size="10" placeholder="none">
+    </label>
+    <span class="muted" style="font-size:.8rem"><span id="wsDot" class="dot"></span> <span id="wsText">offline</span></span>
+  </header>
+
+  <div id="authBanner" hidden>
+    <div class="wrap">
+      <strong>Admin key required.</strong>
+      This sandbox was installed with an <code>ADMIN_KEY</code>, so the admin API is
+      protected. Paste the key into the <b>key</b> box at the top right, then press Enter.
+      <details>
+        <summary>Where do I find it?</summary>
+        <p>The installer printed it once, and it is the <code>ADMIN_KEY</code> line of the
+           <code>.env</code> file in your install folder:</p>
+        <pre>Windows   %LOCALAPPDATA%\SapBahSandbox\.env
+macOS     ~/Applications/SapBahSandbox/.env
+Linux     ~/.local/share/sap-bah-sandbox/.env
+Server    /opt/sap-bah-sandbox/.env</pre>
+        <p>On a trusted LAN you can turn the check off instead: blank out
+           <code>ADMIN_KEY</code> in that file and restart
+           (<code>sapbah restart</code>). Do <b>not</b> do that if the sandbox is
+           reachable from the internet.</p>
+      </details>
+    </div>
+  </div>
+
+  <div id="updateBanner" hidden>
+    <div class="wrap">
+      <strong>Version <span id="updLatest"></span> is available</strong>
+      <span class="muted">(installed: <span id="updCurrent"></span>)</span>
+      <a id="updNotes" href="https://github.com/bdbais/sap-bah-sandbox/releases" target="_blank" rel="noopener">What's new</a>
+      <span id="updHint" class="muted"></span>
+      <button id="btnUpdate" class="primary sm">Update now</button>
+    </div>
+  </div>
+
+  <main>
+    <!-- ================= Catalog ================= -->
+    <div class="panel active" id="tab-catalog">
+      <section>
+        <h2>Status</h2>
+        <div class="cards" id="statusCards"></div>
+        <p class="muted" id="statusNote" style="margin:.75rem 0 0;font-size:.85rem"></p>
+      </section>
+
+      <section>
+        <h2>Catalog sync</h2>
+        <div class="row">
+          <input id="syncFilter" class="grow" placeholder="Filter packages by name (empty = whole catalog, ~1950 packages)">
+          <label class="inline"><input type="checkbox" id="syncSpecs"> download specs</label>
+          <button class="primary" id="btnSync">Run sync</button>
+        </div>
+        <div class="bar" style="margin-top:.6rem"><div id="syncBar"></div></div>
+        <p class="muted" id="syncMsg" style="margin:.4rem 0 0;font-size:.85rem">Idle.</p>
+      </section>
+
+      <section>
+        <h2>Artifacts</h2>
+        <div class="row" style="margin-bottom:.6rem">
+          <input id="artifactQuery" class="grow" placeholder="Search artifacts…">
+          <select id="artifactType">
+            <option value="">all types</option>
+            <option value="API">API</option>
+            <option value="IFlow">IFlow</option>
+            <option value="Event">Event</option>
+          </select>
+          <button id="btnArtifacts">Search</button>
+        </div>
+        <div class="scroll list-scroll"><table id="artifactTable"></table></div>
+      </section>
+    </div>
+
+    <!-- ================= Changes ================= -->
+    <div class="panel" id="tab-changes">
+      <div class="split">
+        <section>
+          <h2>Changes in run <span id="changeRunLabel" class="muted"></span></h2>
+          <div class="scroll list-scroll"><table id="changeTable"></table></div>
+        </section>
+        <section>
+          <h2>Sync runs</h2>
+          <div class="scroll list-scroll"><table id="runTable"></table></div>
+          <p class="muted" style="margin:.6rem 0 0;font-size:.82rem">
+            Every run writes <code>report.json</code>, <code>report.html</code> and
+            <code>changes.csv</code> under <code>data/reports/</code>.
+          </p>
+        </section>
+      </div>
+    </div>
+
+    <!-- ================= Mocks ================= -->
+    <div class="panel" id="tab-mocks">
+      <section>
+        <h2>Import a specification</h2>
+        <div class="row">
+          <input type="file" id="specFile" accept=".json,.yaml,.yml,.xml,.edmx">
+          <input id="specName" placeholder="name (optional)">
+          <button class="primary" id="btnImportSpec">Import</button>
+        </div>
+        <p class="muted" style="margin:.5rem 0 0;font-size:.83rem">
+          OpenAPI 3, Swagger 2 and OData EDMX (<code>$metadata</code>) are recognised.
+          Download a spec from api.sap.com, or save a <code>$metadata</code> response from a tenant.
+        </p>
+      </section>
+
+      <div class="split">
+        <section>
+          <h2>Mocks</h2>
+          <div class="scroll"><table id="mockTable"></table></div>
+          <div id="mockDetail" style="margin-top:.8rem"></div>
+        </section>
+        <section>
+          <h2>Stored specifications</h2>
+          <div class="scroll list-scroll"><table id="specTable"></table></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- ================= Tests ================= -->
+    <div class="panel" id="tab-tests">
+      <section>
+        <h2>Run the generated suite</h2>
+        <div class="row">
+          <select id="testMock" class="grow"></select>
+          <input id="testTarget" class="grow" placeholder="target base URL (blank = this mock)">
+          <label class="inline"><input type="checkbox" id="testReadOnly"> read-only</label>
+          <button class="primary" id="btnRunTests">Run</button>
+        </div>
+        <div class="bar" style="margin-top:.6rem"><div id="testBar"></div></div>
+        <p class="muted" id="testMsg" style="margin:.4rem 0 0;font-size:.85rem">Idle.</p>
+      </section>
+
+      <div class="split">
+        <section>
+          <h2>Results</h2>
+          <div class="scroll list-scroll"><table id="testResultTable"></table></div>
+        </section>
+        <section>
+          <h2>Past runs</h2>
+          <div class="scroll list-scroll"><table id="testRunTable"></table></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- ================= Network ================= -->
+    <div class="panel" id="tab-network">
+      <section>
+        <div class="row" style="margin-bottom:.6rem">
+          <input id="netFilter" class="grow" placeholder="Filter by path, method, status, mock…">
+          <label class="inline"><input type="checkbox" id="netFollow" checked> follow</label>
+          <button id="btnNetReload">Reload</button>
+          <button class="danger" id="btnNetClear">Clear log</button>
+        </div>
+        <div class="split">
+          <div class="scroll list-scroll" style="max-height:620px"><table id="netTable"></table></div>
+          <div id="netDetail"><p class="empty">Select a request to inspect headers, payloads and timing.</p></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <span>SAP BAH Sandbox <span id="appVersion"></span></span>
+    <span aria-hidden="true">·</span>
+    <a href="https://github.com/bdbais/sap-bah-sandbox" target="_blank" rel="noopener">Source code (MIT)</a>
+    <span aria-hidden="true">·</span>
+    <a href="https://paypal.me/bellizia" target="_blank" rel="noopener">♥ Support the project</a>
+    <span aria-hidden="true">·</span>
+    <button id="btnCheckUpdate" class="sm">Check for updates</button>
+    <span class="spacer"></span>
+    <span>Independent open-source project, not affiliated with or endorsed by SAP SE.</span>
+  </footer>
+
+  <div id="toast"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

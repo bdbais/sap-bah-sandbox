@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+      - name: Shell scripts parse
+        run: bash -n install/install.sh install/uninstall.sh install/templates/sapbah deploy/install.sh
+
+      - name: Smoke test
+        env:
+          PORT: "18080"
+          DATA_DIR: ${{ runner.temp }}/sandbox-data
+          AI_PROVIDER: none
+          UPDATE_CHECK: "false"
+          NODE_OPTIONS: --disable-warning=ExperimentalWarning
+        run: |
+          node dist/server.js &
+          for i in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:18080/api/status && break; sleep 0.5; done
+          curl -fsS http://127.0.0.1:18080/api/status
+          curl -fsS http://127.0.0.1:18080/api/update
+          curl -fsS http://127.0.0.1:18080/ | grep -q 'SAP BAH Sandbox'
+
+  # The stand-alone installers, run for real on each platform.
+  install-unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install
+        run: ./install/install.sh --no-service --dir "$RUNNER_TEMP/sandbox"
+
+      - name: Runs, and the admin key is enforced
+        run: |
+          dir="$RUNNER_TEMP/sandbox"
+          key="$(grep -E '^ADMIN_KEY=' "$dir/.env" | cut -d= -f2)"
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8080/ && break; sleep 0.5; done
+          curl -fsS http://127.0.0.1:8080/ | grep -q 'SAP BAH Sandbox'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/status)" = 401
+          curl -fsS -H "X-Sandbox-Key: $key" http://127.0.0.1:8080/api/update
+          "$dir/sapbah" status
+          "$dir/sapbah" update --check || true
+          "$dir/sapbah" stop
+
+      - name: Uninstall
+        run: ./install/uninstall.sh --purge --dir "$RUNNER_TEMP/sandbox"
+
+  install-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install
+        run: .\install\install.ps1 -NoService -Dir "$env:RUNNER_TEMP\sandbox"
+
+      - name: Runs, and the admin key is enforced
+        run: |
+          $dir = "$env:RUNNER_TEMP\sandbox"
+          $key = ((Select-String -Path "$dir\.env" -Pattern '^ADMIN_KEY=(.*)$').Matches[0].Groups[1].Value)
+          $ok = $false
+          for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
+            try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8080/ | Out-Null; $ok = $true } catch { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $ok) { throw 'The sandbox did not come up.' }
+          try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8080/api/status | Out-Null; throw 'expected 401' }
+          catch { if ([int]$_.Exception.Response.StatusCode -ne 401) { throw } }
+          Invoke-RestMethod -Headers @{ 'X-Sandbox-Key' = $key } http://127.0.0.1:8080/api/update
+          & "$dir\sapbah.cmd" status
+          & "$dir\sapbah.cmd" update --check
+          & "$dir\sapbah.cmd" stop
+          exit 0
+
+      - name: Uninstall
+        run: .\install\uninstall.ps1 -Purge -Dir "$env:RUNNER_TEMP\sandbox"

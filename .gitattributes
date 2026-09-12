@@ -1,0 +1,7 @@
+* text=auto
+
+# Shell scripts must keep LF even in a Windows checkout, or bash chokes on \r.
+*.sh                     text eol=lf
+install/templates/sapbah text eol=lf
+
+*.cmd text eol=crlf
