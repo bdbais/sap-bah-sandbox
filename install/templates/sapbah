@@ -249,7 +249,8 @@ update() {
 
   local work src="" d
   work="$(mktemp -d "${TMPDIR:-/tmp}/sapbah-update.XXXXXX")"
-  echo "Downloading $tag…"
+  # Braces: macOS bash 3.2 would read the "…" bytes as part of the name.
+  echo "Downloading ${tag}…"
   if ! curl -fsSL -o "$work/source.tar.gz" "https://github.com/$repo/archive/refs/tags/$tag.tar.gz" \
      || ! tar -xzf "$work/source.tar.gz" -C "$work"; then
     rm -rf "$work"; echo "Download failed." >&2; return 1

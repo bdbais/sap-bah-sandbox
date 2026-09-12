@@ -107,7 +107,9 @@ fi
 
 # --- Lay out the install directory -----------------------------------------
 
-say "Installing to $TARGET…"
+# Braces matter: macOS bash 3.2 reads the bytes of a UTF-8 "…" as part of a
+# bare variable name, and set -u then aborts on "unbound variable".
+say "Installing to ${TARGET}…"
 mkdir -p "$TARGET/data"
 
 # Stop the running instance first. Unix will happily unlink a running binary,

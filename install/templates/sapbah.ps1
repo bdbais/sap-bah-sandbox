@@ -29,7 +29,15 @@ $Data     = Join-Path $Here 'data'
 $PidFile  = Join-Path $Data 'sandbox.pid'
 $LogOut   = Join-Path $Data 'sandbox.log'
 $LogErr   = Join-Path $Data 'sandbox.err.log'
+# One scheduled task per install: a second copy elsewhere (a test install, say)
+# must not take over, or remove, the autostart of the first. The default
+# location keeps the plain name. uninstall.ps1 derives the same name.
 $TaskName = 'SapBahSandbox'
+if ($Here.TrimEnd('\') -ne (Join-Path $env:LOCALAPPDATA 'SapBahSandbox')) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $digest = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Here.TrimEnd('\').ToLowerInvariant()))
+  $TaskName = 'SapBahSandbox-' + (-join ($digest[0..3] | ForEach-Object { $_.ToString('x2') }))
+}
 
 if (-not (Test-Path $Node)) { Write-Error "Bundled Node runtime is missing: $Node" }
 if (-not (Test-Path $Data)) { New-Item -ItemType Directory -Force $Data | Out-Null }

@@ -13,6 +13,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (-not $Dir) { $Dir = Join-Path $env:LOCALAPPDATA 'SapBahSandbox' }
+$Dir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Dir).TrimEnd('\')
+
+# The same per-install task name sapbah.ps1 uses, so removing one install
+# never touches another install's autostart.
+$TaskName = 'SapBahSandbox'
+if ($Dir -ne (Join-Path $env:LOCALAPPDATA 'SapBahSandbox')) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $digest = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Dir.ToLowerInvariant()))
+  $TaskName = 'SapBahSandbox-' + (-join ($digest[0..3] | ForEach-Object { $_.ToString('x2') }))
+}
 
 function Remove-Tree([string]$path) {
   if (-not (Test-Path $path)) { return }
@@ -44,9 +54,9 @@ if (Test-Path $ctl) {
 }
 # Belt and braces in case the control script was already deleted.
 if (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue) {
-  Unregister-ScheduledTask -TaskName 'SapBahSandbox' -Confirm:$false -ErrorAction SilentlyContinue
+  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 } else {
-  cmd /c "schtasks /delete /tn SapBahSandbox /f >nul 2>nul"
+  cmd /c "schtasks /delete /tn $TaskName /f >nul 2>nul"
 }
 
 if ($Purge) {
