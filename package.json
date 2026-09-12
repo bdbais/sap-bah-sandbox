@@ -1,6 +1,6 @@
 {
   "name": "sap-bah-sandbox",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Local sandbox for SAP Business Accelerator Hub: catalog change tracking, spec-driven mock server, test runner and traffic inspector",
   "license": "MIT",

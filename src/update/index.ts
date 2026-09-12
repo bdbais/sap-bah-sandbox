@@ -37,6 +37,7 @@ export interface UpdateInfo {
 /** A failed update restarts the old version, which would retry at once. */
 const RETRY_AFTER_MS = 24 * 3600_000;
 const TICK_MS = 10 * 60_000;
+const APPLY_TIMEOUT_MS = 30 * 60_000;
 const FIRST_CHECK_MS = 30_000;
 
 const current: string = JSON.parse(
@@ -138,16 +139,19 @@ export function applyUpdate(): { started: boolean; message: string } {
 
   const args = ['update', '--auto'];
   const viaSystemd = process.platform !== 'win32' && Boolean(process.env.INVOCATION_ID);
+  // On Windows and under systemd, the child is only a launcher: it hands the
+  // update to a process that outlives this server, then exits straight away.
+  const launcherOnly = process.platform === 'win32' || viaSystemd;
   let child: ChildProcess;
   if (process.platform === 'win32') {
-    // The script does not redirect itself on Windows, so hand it the log.
-    const log = fs.openSync(path.join(config.storage.dataDir, 'update.log'), 'a');
+    // Not detached: a detached Windows PowerShell has no console and silently
+    // does nothing. `--spawn` moves the real run into its own hidden console,
+    // outside the job object node kills its children with, and logs it.
     child = spawn(
       'powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', controlScript, ...args],
-      { cwd: os.tmpdir(), detached: true, windowsHide: true, stdio: ['ignore', log, log] }
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', controlScript, 'update', '--spawn'],
+      { cwd: os.tmpdir(), windowsHide: true, stdio: 'ignore' }
     );
-    fs.closeSync(log);
   } else if (viaSystemd) {
     // Under systemd, stopping the service kills its whole cgroup - this child
     // included - so the updater runs as a transient unit of its own.
@@ -166,9 +170,9 @@ export function applyUpdate(): { started: boolean; message: string } {
   });
   child.on('exit', (code) => {
     // A successful update replaces this process before the updater exits, so
-    // hearing about the exit means nothing was installed. systemd-run is the
-    // exception: it returns as soon as the transient unit has started.
-    if (viaSystemd && code === 0) return;
+    // hearing about the exit means nothing was installed - unless the child
+    // was only a launcher, which returns as soon as the real run has started.
+    if (launcherOnly && code === 0) return;
     info = {
       ...info,
       applying: false,
@@ -176,6 +180,12 @@ export function applyUpdate(): { started: boolean; message: string } {
     };
   });
   child.unref();
+
+  // Success replaces this process. Still here long after, the update did not
+  // happen: free the button and say where to look.
+  setTimeout(() => {
+    if (info.applying) info = { ...info, applying: false, error: 'The update did not complete; see data/update.log.' };
+  }, APPLY_TIMEOUT_MS).unref();
 
   info = { ...info, applying: true };
   return { started: true, message: `Installing ${info.latest}. The sandbox restarts when it is done.` };

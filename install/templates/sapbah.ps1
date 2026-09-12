@@ -202,7 +202,19 @@ function ConvertTo-SemVer([string]$v) {
 
 function Update-Sandbox {
   foreach ($a in $Rest) {
-    if ($a -notin @('--auto', '--check', '--force')) { Write-Host "Unknown option: $a"; exit 1 }
+    if ($a -notin @('--auto', '--check', '--force', '--spawn')) { Write-Host "Unknown option: $a"; exit 1 }
+  }
+  if ($Rest -contains '--spawn') {
+    # How the server starts an update. Windows PowerShell does nothing at all
+    # without a console, and node kills its children when it stops - which the
+    # installer is about to make it do. Start-Process gives the real run its
+    # own hidden console, outside node's job object, and this copy returns.
+    $argLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" update --auto' -f $PSCommandPath
+    Start-Process -FilePath 'powershell.exe' -ArgumentList $argLine -WindowStyle Hidden `
+                  -WorkingDirectory $env:TEMP `
+                  -RedirectStandardOutput (Join-Path $Data 'update.log') `
+                  -RedirectStandardError (Join-Path $Data 'update.err.log')
+    return
   }
   $check = $Rest -contains '--check'
   $force = $Rest -contains '--force'
