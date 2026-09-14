@@ -49,9 +49,16 @@ if ($Purge -and -not $markers) {
 
 $ctl = Join-Path $Dir 'sapbah.cmd'
 if (Test-Path $ctl) {
-  & $ctl service uninstall 2>$null
-  & $ctl stop 2>$null
+  # A broken install (runtime gone) makes the control script fail, and under
+  # ErrorActionPreference = Stop its stderr would abort the uninstall - the
+  # very case where removing it matters most.
+  try { & $ctl service uninstall 2>$null } catch { }
+  try { & $ctl stop 2>$null } catch { }
 }
+# Whatever the control script could not stop.
+Get-Process node -ErrorAction SilentlyContinue |
+  Where-Object { $_.Path -and $_.Path.StartsWith($Dir, [System.StringComparison]::OrdinalIgnoreCase) } |
+  ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
 # Belt and braces in case the control script was already deleted.
 if (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue) {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
