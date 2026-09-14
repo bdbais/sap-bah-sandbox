@@ -1,5 +1,8 @@
 node_modules/
 dist/
+site/dist/
+.wrangler/
+.claude/launch.json
 .cache/
 data/
 .env

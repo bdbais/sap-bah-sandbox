@@ -20,6 +20,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
 
+      - name: Website builds in every language
+        run: node site/build.mjs
+
       - name: Shell scripts parse
         run: bash -n install/install.sh install/uninstall.sh install/templates/sapbah deploy/install.sh
 
